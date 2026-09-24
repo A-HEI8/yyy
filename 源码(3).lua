@@ -37,25 +37,101 @@ local function disNC()if nConn then nConn:Disconnect()nConn=nil end local c=LP.C
 C2N:Toggle({Title="穿墙",Value=false,FeatureName="穿墙",Icon="shield-off",Callback=function(s)if s then enNC()else disNC()end end})
 local C2C=T2:Category({Title="相机",IconName="camera"})
 C2C:Paragraph({Title="强制第三人称",Desc="开启后强制切到第三人称",Icon="info"})
-local forceTPSOn=false
-local forceTPSConn=nil
-C2C:Toggle({Title="强制第三人称",Value=false,FeatureName="第三人称",Icon="camera",Callback=function(s)
-forceTPSOn=s
-if s then
-if forceTPSConn then forceTPSConn:Disconnect()end
-LP.CameraMode=Enum.CameraMode.Classic
-forceTPSConn=RS.RenderStepped:Connect(function()
-if not forceTPSOn then return end
-if LP.CameraMode~=Enum.CameraMode.Classic then LP.CameraMode=Enum.CameraMode.Classic end
-end)
-N("相机","已强制第三人称",2)
-else
-if forceTPSConn then forceTPSConn:Disconnect()forceTPSConn=nil end
-N("相机","已关闭强制",2)
+
+-- ===== 强制第三人称依赖（夜脚本版） =====
+local ThirdPersonUnlock = { Enabled = false, Connection = nil }
+
+local function ApplyUnlock()
+    pcall(function()
+        if LP.CameraMode ~= Enum.CameraMode.Classic then
+            LP.CameraMode = Enum.CameraMode.Classic
+        end
+        LP.CameraMinZoomDistance = 0.5
+        LP.CameraMaxZoomDistance = 50
+    end)
 end
-end})
+
+local function EnableUnlock()
+    if ThirdPersonUnlock.Connection then return end
+    ThirdPersonUnlock.Enabled = true
+    ApplyUnlock()
+    ThirdPersonUnlock.Connection = RS.RenderStepped:Connect(function()
+        if ThirdPersonUnlock.Enabled then ApplyUnlock() end
+    end)
+end
+
+local function DisableUnlock()
+    ThirdPersonUnlock.Enabled = false
+    if ThirdPersonUnlock.Connection then
+        ThirdPersonUnlock.Connection:Disconnect()
+        ThirdPersonUnlock.Connection = nil
+    end
+end
+
+LP.CharacterAdded:Connect(function()
+    task.wait(0.5)
+    if ThirdPersonUnlock.Enabled then ApplyUnlock() end
+end)
+
+local function AddFeature(name) end
+local function RemoveFeature(name) end
+
+C2C:Toggle({
+    Title = "强制第三人称",
+    Value = false,
+    FeatureName = "第三人称",
+    Icon = "camera",
+    Callback = function(v)
+        if v then
+            EnableUnlock()
+            AddFeature("第三人称")
+            N("相机", "已强制第三人称", 2)
+        else
+            DisableUnlock()
+            RemoveFeature("第三人称")
+            N("相机", "已关闭强制", 2)
+        end
+    end
+})
+
 C2C:Paragraph({Title="放大距离",Desc="默认128，数字改大镜头能拉更远",Icon="info"})
 C2C:TextInput({Title="",Placeholder="输入最大视距，如 500",Value="128",Callback=function(t)local n=tonumber(t)if n then LP.CameraMaxZoomDistance=n N("相机","最大视距 "..n,2)end end})
+
+C2C:Paragraph({Title="普京比例",Desc="把画面纵向压缩成普京比例，视觉恶搞用",Icon="camera"})
+C2C:Button({Text="普京比例",Icon="camera",Callback=function()
+getgenv().Resolution = {
+    [".gg/scripters"] = 0.65
+}
+
+local Camera = workspace.CurrentCamera
+if getgenv().gg_scripters == nil then
+    game:GetService("RunService").RenderStepped:Connect(
+        function()
+            Camera.CFrame = Camera.CFrame * CFrame.new(0, 0, 0, 1, 0, 0, 0, getgenv().Resolution[".gg/scripters"], 0, 0, 0, 1)
+        end
+    )
+end
+getgenv().gg_scripters = "g5s"
+N("比例","普京比例已应用",2)
+end})
+
+C2C:Button({Text="恢复比例",Icon="refresh-cw",Callback=function()
+getgenv().Resolution = {
+    [".gg/scripters"] = 1
+}
+
+local Camera = workspace.CurrentCamera
+if getgenv().gg_scripters == nil then
+    game:GetService("RunService").RenderStepped:Connect(
+        function()
+            Camera.CFrame = Camera.CFrame * CFrame.new(0, 0, 0, 1, 0, 0, 0, getgenv().Resolution[".gg/scripters"], 0, 0, 0, 1)
+        end
+    )
+end
+getgenv().gg_scripters = "g5s"
+N("比例","比例已恢复",2)
+end})
+
 local C2W=T2:Category({Title="踏空行走",IconName="wind"})
 C2W:Paragraph({Title="踏空行走",Desc="点击下方按钮加载外部踏空脚本",Icon="info"})
 C2W:Button({Text="启动踏空行走",Icon="play",Callback=function()
@@ -223,6 +299,47 @@ local T3=MW:Tab({Title="玩家"})
 local C3L=T3:Category({Title="本地玩家",IconName="user"})
 C3L:Paragraph({Title="移动速度",Desc="默认16",Icon="info"})
 C3L:TextInput({Title="",Placeholder="输入速度数字，如 16",Value="16",Callback=function(t)local n=tonumber(t)if n and LP.Character then local h=LP.Character:FindFirstChildOfClass("Humanoid")if h then h.WalkSpeed=n end end end})
+
+-- ===== 快速跑步 =====
+C3L:Paragraph({Title="快速跑步",Desc="推荐调 2，填 0 表示关闭",Icon="info"})
+local tpRunSpeed = 0
+local tpRunActive = false
+local tpRunConn = nil
+
+local function startTPRun()
+    if tpRunConn then return end
+    tpRunActive = true
+    tpRunConn = RS.Heartbeat:Connect(function()
+        if not tpRunActive then return end
+        local chr = LP.Character
+        local hum = chr and chr:FindFirstChildWhichIsA("Humanoid")
+        if chr and hum and hum.Parent and hum.MoveDirection.Magnitude > 0 then
+            if tpRunSpeed and tpRunSpeed ~= 0 then
+                chr:TranslateBy(hum.MoveDirection * tpRunSpeed)
+            end
+        end
+    end)
+end
+
+local function stopTPRun()
+    tpRunActive = false
+    if tpRunConn then tpRunConn:Disconnect() tpRunConn = nil end
+end
+
+C3L:TextInput({Title="",Placeholder="输入快速跑步速度，推荐 2，填 0 关闭",Value="0",Callback=function(t)
+    local n = tonumber(t)
+    if not n then return end
+    tpRunSpeed = n
+    if n ~= 0 then
+        startTPRun()
+        N("快速跑步","速度 "..n.." 已开启",2)
+    else
+        stopTPRun()
+        N("快速跑步","已关闭",2)
+    end
+end})
+-- ===== 快速跑步结束 =====
+
 C3L:Paragraph({Title="跳跃高度",Desc="默认50",Icon="info"})
 C3L:TextInput({Title="",Placeholder="输入跳跃数字，如 50",Value="50",Callback=function(t)local n=tonumber(t)if n and LP.Character then local h=LP.Character:FindFirstChildOfClass("Humanoid")if h then h.UseJumpPower=true h.JumpPower=n end end end})
 C3L:Paragraph({Title="重力",Desc="默认196.2",Icon="info"})
@@ -377,252 +494,374 @@ N("消息","开始发送",2)
 else if speakThread then task.cancel(speakThread)speakThread=nil end N("消息","已停止",2)end
 end})
 
-local TI=MW:Tab({Title="互动"})
-local CI=TI:Category({Title="交互优化",IconName="zap"})
-CI:Paragraph({Title="快速互动",Desc="把长按交互时间缩短",Icon="info"})
-CI:Toggle({Title="快速互动",Value=false,FeatureName="快速互动",Icon="zap",Callback=function(s)
-if s then
-local PPS=game:GetService("ProximityPromptService")
-getgenv().TXH_FastPrompt=PPS.PromptButtonHoldBegan:Connect(function(prompt)pcall(function()prompt.HoldDuration=0 end)end)
-getgenv().TXH_FastPromptNew=workspace.DescendantAdded:Connect(function(v)if v:IsA("ProximityPrompt")then pcall(function()v.HoldDuration=0 end)end end)
-for _,prompt in pairs(workspace:GetDescendants())do if prompt:IsA("ProximityPrompt")then pcall(function()prompt.HoldDuration=0 end)end end
-N("快速互动","已开启",2)
-else
-if getgenv().TXH_FastPrompt then getgenv().TXH_FastPrompt:Disconnect()getgenv().TXH_FastPrompt=nil end
-if getgenv().TXH_FastPromptNew then getgenv().TXH_FastPromptNew:Disconnect()getgenv().TXH_FastPromptNew=nil end
-for _,prompt in pairs(workspace:GetDescendants())do if prompt:IsA("ProximityPrompt")then pcall(function()prompt.HoldDuration=0.5 end)end end
-N("快速互动","已关闭",2)
-end
-end})
-CI:Paragraph({Title="交互距离",Desc="默认10，推荐50~200",Icon="info"})
-CI:TextInput({Title="",Placeholder="输入距离数字，默认 10",Value="10",Callback=function(t)
-local n=tonumber(t)
-if n then
-getgenv().TXH_InteractDist=n
-for _,v in pairs(workspace:GetDescendants())do if v:IsA("ProximityPrompt")then pcall(function()v.MaxActivationDistance=n end)end end
-N("交互距离","已设为 "..n,2)
-end
-end})
-CI:Paragraph({Title="自动互动",Desc="每0.25秒扫一次自动触发附近按钮",Icon="info"})
-local autoInteractOn=false
-CI:Toggle({Title="自动互动",Value=false,FeatureName="自动互动",Icon="refresh-cw",Callback=function(s)
-autoInteractOn=s
-if s then
-task.spawn(function()
-while autoInteractOn do
-for _,descendant in pairs(workspace:GetDescendants())do
-if descendant:IsA("ProximityPrompt")then pcall(function()fireproximityprompt(descendant)end)end
-end
-task.wait(0.25)
-end
-end)
-N("自动互动","已开启",2)
-else N("自动互动","已关闭",2)end
-end})
+-- ============================================================
+-- NPC / 互动 / 玩家透视 系统（新增，供透视 Tab 使用）
+-- ============================================================
+local Connections = {}
 
--- ========== 互动物体高亮（通用版） ==========
-local EMFConn=nil
-local EMFTracked={}
-local EMFConfig={Color=Color3.fromRGB(0,200,255),UseHighlight=true,UseBox=false,ShowLabel=true,LabelText="互动"}
-
-local function emfGetPart(obj)
-    local a=obj
-    for _=1,5 do
-        if not a or a==workspace then return nil end
-        if a:IsA("BasePart") then return a end
-        a=a.Parent
+-- NPC ESP
+local NPCESP = { Enabled = false, Color = Color3.fromRGB(0,162,255), Highlights = {} }
+local function GetNPCPart(model)
+    if not model then return nil end
+    if model:FindFirstChild("HumanoidRootPart") then return model.HumanoidRootPart end
+    for _, part in pairs(model:GetDescendants()) do
+        if part:IsA("BasePart") then return part end
     end
     return nil
 end
-
-local function emfMark(part)
-    if not part or EMFTracked[part] then return end
-    if Players:GetPlayerFromCharacter(part) then return end
-    local d={}
-    pcall(function()
-        if EMFConfig.UseHighlight then
-            local h=Instance.new("Highlight")
-            h.Name="TXH_EMF_HL"
-            h.FillColor=EMFConfig.Color
-            h.OutlineColor=EMFConfig.Color
-            h.FillTransparency=0.6
-            h.OutlineTransparency=0
-            h.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop
-            h.Adornee=part
-            h.Parent=part
-            d.hl=h
-        end
-        if EMFConfig.UseBox then
-            local sb=Instance.new("SelectionBox")
-            sb.Name="TXH_EMF_SB"
-            sb.Color3=EMFConfig.Color
-            sb.LineThickness=0.1
-            sb.Adornee=part
-            sb.Parent=part
-            d.sb=sb
-        end
-        if EMFConfig.ShowLabel then
-            local bb=Instance.new("BillboardGui")
-            bb.Name="TXH_EMF_BB"
-            bb.Size=UDim2.new(0,120,0,32)
-            bb.StudsOffset=Vector3.new(0,2.5,0)
-            bb.AlwaysOnTop=true
-            bb.MaxDistance=math.huge
-            bb.Adornee=part
-            local lbl=Instance.new("TextLabel")
-            lbl.Size=UDim2.new(1,0,1,0)
-            lbl.BackgroundTransparency=1
-            lbl.Text=EMFConfig.LabelText
-            lbl.TextColor3=EMFConfig.Color
-            lbl.TextStrokeTransparency=0
-            lbl.TextStrokeColor3=Color3.new(0,0,0)
-            lbl.TextScaled=true
-            lbl.Font=Enum.Font.GothamBold
-            lbl.Parent=bb
-            bb.Parent=part
-            d.bb=bb
-            d.lbl=lbl
-        end
-    end)
-    EMFTracked[part]=d
-end
-
-local function emfUnmark(part)
-    local d=EMFTracked[part]
-    if d then
-        pcall(function() if d.hl then d.hl:Destroy() end end)
-        pcall(function() if d.sb then d.sb:Destroy() end end)
-        pcall(function() if d.bb then d.bb:Destroy() end end)
-        EMFTracked[part]=nil
+local function AddNPCESP(model)
+    if not model then return end
+    local existing = NPCESP.Highlights[model]
+    if existing then
+        if existing.Parent then return else NPCESP.Highlights[model] = nil end
     end
-end
-
-local function emfScanAll()
-    for _,obj in ipairs(workspace:GetDescendants())do
-        if obj:IsA("ProximityPrompt") or obj:IsA("ClickDetector") then
-            local part=emfGetPart(obj)
-            if part then emfMark(part) end
-        end
-    end
-end
-
-local function emfOnAdded(obj)
-    if obj:IsA("ProximityPrompt") or obj:IsA("ClickDetector") then
-        task.wait(0.1)
-        local part=emfGetPart(obj)
-        if part then emfMark(part) end
-    end
-end
-
-local function emfClearAll()
-    for part,_ in pairs(EMFTracked)do emfUnmark(part) end
-    EMFTracked={}
-end
-
-CI:Paragraph({Title="互动透视",Desc="高亮场景里所有可交互物体",Icon="eye"})
-CI:Toggle({Title="内部发光",Value=true,FeatureName="互动发光",Icon="sun",Callback=function(s)
-    EMFConfig.UseHighlight=s
-    if s then for part,d in pairs(EMFTracked)do if not d.hl then emfMark(part) end end
-    else for part,d in pairs(EMFTracked)do if d.hl then pcall(function()d.hl:Destroy()end) d.hl=nil end end end
-end})
-CI:Toggle({Title="方框描边",Value=false,FeatureName="互动方框",Icon="square",Callback=function(s)
-    EMFConfig.UseBox=s
-    if s then for part,d in pairs(EMFTracked)do if not d.sb then emfMark(part) end end
-    else for part,d in pairs(EMFTracked)do if d.sb then pcall(function()d.sb:Destroy()end) d.sb=nil end end end
-end})
-CI:Toggle({Title="显示文字",Value=true,FeatureName="互动文字",Icon="type",Callback=function(s)
-    EMFConfig.ShowLabel=s
-    if s then for part,d in pairs(EMFTracked)do if not d.bb then emfMark(part) end end
-    else for part,d in pairs(EMFTracked)do if d.bb then pcall(function()d.bb:Destroy()end) d.bb=nil end end end
-end})
-CI:Paragraph({Title="文字内容",Desc="改完重开透视生效",Icon="info"})
-CI:TextInput({Title="",Placeholder="默认: 互动",Value="互动",Callback=function(t)
-    if t and t~="" then
-        EMFConfig.LabelText=t
-        for _,d in pairs(EMFTracked)do if d.lbl then d.lbl.Text=t end end
-    end
-end})
-CI:Paragraph({Title="颜色",Desc="高亮颜色",Icon="palette"})
-CI:ColorPickerButton({Title="互动颜色",Default=Color3.fromRGB(0,200,255),Callback=function(color)
-    EMFConfig.Color=color
-    for _,d in pairs(EMFTracked)do
-        pcall(function() if d.hl then d.hl.FillColor=color d.hl.OutlineColor=color end end)
-        pcall(function() if d.sb then d.sb.Color3=color end end)
-        pcall(function() if d.lbl then d.lbl.TextColor3=color end end)
-    end
-end})
-CI:Toggle({Title="开启互动透视",Value=false,FeatureName="互动透视开关",Icon="eye",Callback=function(s)
-if s then
-    emfScanAll()
-    EMFConn=workspace.DescendantAdded:Connect(emfOnAdded)
-    N("互动透视","已开启",2)
-else
-    if EMFConn then EMFConn:Disconnect()EMFConn=nil end
-    emfClearAll()
-    N("互动透视","已关闭",2)
-end
-end})
-
-local TN=MW:Tab({Title="夜视"})
-local C4V=TN:Category({Title="夜视",IconName="sun"})
-C4V:Paragraph({Title="夜视",Desc="开启后环境变亮，夜里也能看清",Icon="info"})
-C4V:Toggle({Title="夜视",Value=false,FeatureName="夜视",Icon="sun",Callback=function(s)
-if s then LG.Ambient=Color3.new(1,1,1)else LG.Ambient=Color3.new(0,0,0)end
-end})
-C4V:Paragraph({Title="去雾",Desc="开启后去除雾气，关闭恢复原状",Icon="info"})
-local fogOrigStart=LG.FogStart
-local fogOrigEnd=LG.FogEnd
-C4V:Toggle({Title="去雾",Value=false,FeatureName="去雾",Icon="cloud-off",Callback=function(s)
-if s then
-fogOrigStart=LG.FogStart
-fogOrigEnd=LG.FogEnd
-LG.FogStart=0
-LG.FogEnd=100000000000000000000000
-N("去雾","已开启",2)
-else
-LG.FogStart=fogOrigStart
-LG.FogEnd=fogOrigEnd
-N("去雾","已关闭",2)
-end
-end})
-
--- ===== 去阴影 =====
-C4V:Paragraph({Title="去阴影",Desc="去掉全局阴影和所有部件的投影（手机端性能也会更好）",Icon="moon"})
-local shadowOriginals={}
-local noShadowConn=nil
-local origGlobalShadows=LG.GlobalShadows
-
-local function noShadowApply(part)
-    if part:IsA("BasePart") and part.CastShadow then
-        if shadowOriginals[part]==nil then shadowOriginals[part]=true end
-        pcall(function() part.CastShadow=false end)
-    end
-end
-
-C4V:Toggle({Title="去阴影",Value=false,FeatureName="去阴影",Icon="moon",Callback=function(s)
-    if s then
-        origGlobalShadows=LG.GlobalShadows
-        pcall(function() LG.GlobalShadows=false end)
-        for _,d in ipairs(workspace:GetDescendants())do
-            if d:IsA("BasePart") then noShadowApply(d) end
-        end
-        noShadowConn=workspace.DescendantAdded:Connect(function(d)
-            if d:IsA("BasePart") then noShadowApply(d) end
+    if not model:FindFirstChildWhichIsA("Humanoid") then return end
+    if game.Players:GetPlayerFromCharacter(model) then return end
+    local part = GetNPCPart(model)
+    if not part then return end
+    local success, hl = pcall(function()
+        local h = Instance.new("Highlight")
+        h.Name = "NPCESP"
+        task.defer(function()
+            if model and model.Parent then h.Adornee = model end
         end)
-        N("去阴影","已开启",2)
-    else
-        pcall(function() LG.GlobalShadows=origGlobalShadows end)
-        if noShadowConn then noShadowConn:Disconnect()noShadowConn=nil end
-        for part,_ in pairs(shadowOriginals)do
-            pcall(function()
-                if part and part.Parent then part.CastShadow=true end
+        h.FillColor = NPCESP.Color
+        h.OutlineColor = Color3.fromRGB(255,255,255)
+        h.FillTransparency = 0.4
+        h.OutlineTransparency = 0
+        h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        h.Parent = CG
+        return h
+    end)
+    if success and hl then
+        NPCESP.Highlights[model] = hl
+        task.delay(1, function()
+            if hl and hl.Parent and (not hl.Adornee or hl.Adornee ~= model) then
+                pcall(function() hl.Adornee = model end)
+            end
+        end)
+        pcall(function()
+            hl.AncestryChanged:Connect(function(_, parent)
+                if not parent then
+                    pcall(function() hl:Destroy() end)
+                    NPCESP.Highlights[model] = nil
+                end
+            end)
+        end)
+    end
+end
+local function RemoveNPCESP(model)
+    if not model then return end
+    if NPCESP.Highlights[model] then
+        pcall(function()
+            if NPCESP.Highlights[model] and NPCESP.Highlights[model].Parent then
+                NPCESP.Highlights[model]:Destroy()
+            end
+        end)
+        NPCESP.Highlights[model] = nil
+    end
+end
+local function ToggleNPCESP(state)
+    NPCESP.Enabled = state
+    if state then
+        task.spawn(function()
+            for _, obj in ipairs(workspace:GetDescendants()) do
+                if obj:IsA("Model") then task.spawn(AddNPCESP, obj) end
+            end
+        end)
+        if not Connections.NPC then
+            Connections.NPC = workspace.DescendantAdded:Connect(function(child)
+                task.delay(0.5, function()
+                    if child and child:IsA("Model") then AddNPCESP(child)
+                    elseif child and child:IsA("Humanoid") and child.Parent then AddNPCESP(child.Parent) end
+                end)
             end)
         end
-        shadowOriginals={}
-        N("去阴影","已关闭",2)
+        task.spawn(function()
+            while NPCESP.Enabled do
+                for model, hl in pairs(NPCESP.Highlights) do
+                    if not model or not model.Parent or not hl or not hl.Parent then
+                        NPCESP.Highlights[model] = nil
+                    end
+                end
+                for _, obj in ipairs(workspace:GetDescendants()) do
+                    if obj:IsA("Model") then AddNPCESP(obj) end
+                end
+                task.wait(2)
+            end
+        end)
+    else
+        local toRemove = {}
+        for model, _ in pairs(NPCESP.Highlights) do table.insert(toRemove, model) end
+        for _, model in ipairs(toRemove) do RemoveNPCESP(model) end
+        if Connections.NPC then
+            pcall(function() Connections.NPC:Disconnect() end)
+            Connections.NPC = nil
+        end
     end
-end})
+end
 
+-- 旧互动透视
+local InteractESP = { Enabled = false, Color = Color3.fromRGB(0,255,0), Highlights = {} }
+local function IsInteractive_Old(obj) return obj and (obj:IsA("ProximityPrompt") or obj:IsA("ClickDetector")) end
+local function FindAdornPart_Old(target)
+    if not target then return nil end
+    if target:IsA("BasePart") then return target end
+    if target:IsA("Model") then
+        if target.PrimaryPart then return target.PrimaryPart end
+        for _, c in pairs(target:GetChildren()) do if c:IsA("BasePart") then return c end end
+    end
+    return nil
+end
+local function AddInteractESP(target)
+    if not target then return end
+    if InteractESP.Highlights[target] then return end
+    if not (target:IsA("BasePart") or target:IsA("Model")) then return end
+    local ok, hl = pcall(function()
+        local h = Instance.new("Highlight")
+        h.Name = "InteractESP"
+        h.Adornee = target
+        h.FillColor = InteractESP.Color
+        h.OutlineColor = Color3.fromRGB(255,255,255)
+        h.FillTransparency = 0.5
+        h.OutlineTransparency = 0
+        h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        h.Parent = target
+        return h
+    end)
+    if not ok then return end
+    InteractESP.Highlights[target] = hl
+    local adornPart = FindAdornPart_Old(target)
+    if adornPart then
+        if adornPart:FindFirstChild("InteractLabel") then return end
+        local prompt = target:FindFirstChildWhichIsA("ProximityPrompt") or (target.Parent and target.Parent:FindFirstChildWhichIsA("ProximityPrompt"))
+        local text = (prompt and (prompt.ActionText ~= "" and prompt.ActionText)) or "可互动"
+        local bb = Instance.new("BillboardGui")
+        bb.Name = "InteractLabel"
+        bb.Adornee = adornPart
+        bb.Size = UDim2.new(0,120,0,30)
+        bb.StudsOffset = Vector3.new(0,3,0)
+        bb.AlwaysOnTop = true
+        bb.Parent = adornPart
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(1,0,1,0)
+        label.BackgroundTransparency = 1
+        label.Text = text
+        label.TextColor3 = InteractESP.Color
+        label.TextStrokeTransparency = 0.5
+        label.TextStrokeColor3 = Color3.new(0,0,0)
+        label.Font = Enum.Font.SourceSansBold
+        label.TextSize = 14
+        label.Parent = bb
+    end
+end
+local function RemoveInteractESP(target)
+    if not target then return end
+    if InteractESP.Highlights[target] then
+        pcall(function() if InteractESP.Highlights[target].Parent then InteractESP.Highlights[target]:Destroy() end end)
+        InteractESP.Highlights[target] = nil
+    end
+    pcall(function()
+        if target and target.GetDescendants then
+            for _, v in pairs(target:GetDescendants()) do
+                if v:IsA("BillboardGui") and v.Name == "InteractLabel" then pcall(function() v:Destroy() end) end
+            end
+        end
+    end)
+end
+local function ToggleInteractESP(state)
+    InteractESP.Enabled = state
+    if state then
+        task.spawn(function()
+            for _, obj in ipairs(workspace:GetDescendants()) do
+                if IsInteractive_Old(obj) and obj.Parent then pcall(function() AddInteractESP(obj.Parent) end) end
+            end
+        end)
+        if not Connections.Interact then
+            Connections.Interact = workspace.DescendantAdded:Connect(function(child)
+                task.delay(1, function()
+                    if child and IsInteractive_Old(child) and child.Parent then AddInteractESP(child.Parent)
+                    elseif child and child:IsA("BasePart") and child.Parent then
+                        for _, c in pairs(child:GetDescendants()) do
+                            if IsInteractive_Old(c) and c.Parent then AddInteractESP(c.Parent) end
+                        end
+                    end
+                end)
+            end)
+        end
+    else
+        local toRemove = {}
+        for target, _ in pairs(InteractESP.Highlights) do table.insert(toRemove, target) end
+        for _, target in ipairs(toRemove) do RemoveInteractESP(target) end
+        if Connections.Interact then pcall(function() Connections.Interact:Disconnect() end) Connections.Interact = nil end
+    end
+end
+
+-- 新互动透视
+local NewInteractESP = { Enabled = false, Color = Color3.fromRGB(0,255,0), Highlights = {} }
+local function IsInteractive_New(o) return o and (o:IsA("ProximityPrompt") or o:IsA("ClickDetector")) end
+local function GetInteractiveTarget(node)
+    local p = node
+    while p do
+        if p:IsA("BasePart") or p:IsA("Model") then return p end
+        p = p.Parent
+    end
+end
+local function AddNewInteractESP(target)
+    if not target then return end
+    if NewInteractESP.Highlights[target] then return end
+    local ok, h = pcall(function()
+        local hl = Instance.new("Highlight")
+        hl.Name = "NewInteractESP"
+        hl.Adornee = target
+        hl.FillColor = NewInteractESP.Color
+        hl.OutlineColor = Color3.new(1,1,1)
+        hl.FillTransparency = .5
+        hl.OutlineTransparency = 0
+        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        hl.Parent = target
+        return hl
+    end)
+    if not ok or not h then return end
+    NewInteractESP.Highlights[target] = h
+end
+local function ToggleNewInteractESP(state)
+    NewInteractESP.Enabled = state
+    if state then
+        task.spawn(function()
+            for _, v in ipairs(workspace:GetDescendants()) do
+                if IsInteractive_New(v) then
+                    local t = GetInteractiveTarget(v)
+                    if t then AddNewInteractESP(t) end
+                end
+            end
+        end)
+        if not Connections.NewInteract then
+            Connections.NewInteract = workspace.DescendantAdded:Connect(function(c)
+                task.delay(0.05, function()
+                    if c and c.GetDescendants then
+                        for _, d in pairs(c:GetDescendants()) do
+                            if IsInteractive_New(d) then
+                                local t = GetInteractiveTarget(d)
+                                if t then AddNewInteractESP(t) end
+                            end
+                        end
+                    end
+                    if IsInteractive_New(c) then
+                        local t = GetInteractiveTarget(c)
+                        if t then AddNewInteractESP(t) end
+                    end
+                end)
+            end)
+        end
+    else
+        for t, h in pairs(NewInteractESP.Highlights) do pcall(function() h:Destroy() end) end
+        NewInteractESP.Highlights = {}
+        if Connections.NewInteract then pcall(function() Connections.NewInteract:Disconnect() end) Connections.NewInteract = nil end
+    end
+end
+
+-- 玩家透视（新版本，替换原 PLAYER_ESP 使用）
+local PLAYER_ESP = {
+    Enabled = false, HighlightEnabled = false, BoxEnabled = false,
+    TeamCheck = false, ShowName = false, ShowHealth = false, ShowDist = false
+}
+local function ClearPlayerESP()
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj.Name == "PlayerESP_Highlight" or obj.Name == "PlayerESP_Info" or obj.Name == "PlayerESP_Box" then
+            obj:Destroy()
+        end
+    end
+end
+local function UpdatePlayerESP()
+    if not PLAYER_ESP.Enabled then return end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LP and p.Character then
+            local char = p.Character
+            local hum = char:FindFirstChild("Humanoid")
+            local head = char:FindFirstChild("Head")
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if hum and head and root and hum.Health > -500 then
+                local isTeam = (p.Team == LP.Team)
+                local filtered = PLAYER_ESP.TeamCheck and isTeam
+                local color = p.TeamColor.Color
+
+                local high = char:FindFirstChild("PlayerESP_Highlight")
+                if PLAYER_ESP.HighlightEnabled then
+                    if not high then
+                        high = Instance.new("Highlight", char)
+                        high.Name = "PlayerESP_Highlight"
+                    end
+                    high.FillColor = color
+                    high.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                elseif high then
+                    high:Destroy()
+                end
+
+                local box = char:FindFirstChild("PlayerESP_Box")
+                if PLAYER_ESP.BoxEnabled and not filtered then
+                    if not box then
+                        box = Instance.new("BillboardGui", char)
+                        box.Name = "PlayerESP_Box"
+                        box.Size = UDim2.new(4.5,0,6,0)
+                        box.AlwaysOnTop = true
+                        box.Adornee = root
+                        local f = Instance.new("Frame", box)
+                        f.Size = UDim2.new(1,0,1,0)
+                        f.BackgroundTransparency = 1
+                        local s = Instance.new("UIStroke", f)
+                        s.Thickness = 1.5
+                    end
+                    box.Frame.UIStroke.Color = color
+                elseif box then
+                    box:Destroy()
+                end
+
+                local info = char:FindFirstChild("PlayerESP_Info")
+                if not filtered then
+                    if not info then
+                        info = Instance.new("BillboardGui", char)
+                        info.Name = "PlayerESP_Info"
+                        info.Size = UDim2.new(0,200,0,50)
+                        info.AlwaysOnTop = true
+                        info.Adornee = head
+                        info.ExtentsOffset = Vector3.new(0,3.5,0)
+                        local txt = Instance.new("TextLabel", info)
+                        txt.Name = "Label"
+                        txt.Size = UDim2.new(1,0,1,0)
+                        txt.BackgroundTransparency = 1
+                        txt.RichText = true
+                        txt.TextStrokeTransparency = 0.5
+                        txt.Font = Enum.Font.GothamMedium
+                    end
+                    local text = ""
+                    if PLAYER_ESP.ShowName then
+                        text = "<font color='#ffffff'><b>"..p.DisplayName.."</b></font>\n"
+                    end
+                    if PLAYER_ESP.ShowHealth then
+                        local hp = math.floor(hum.Health)
+                        local hpColor = (hp > 50 and "#55ff55" or "#ff5555")
+                        text = text .. "<font color='"..hpColor.."'>HP: "..hp.."</font> "
+                    end
+                    if PLAYER_ESP.ShowDist then
+                        local dist = math.floor((Cam.CFrame.Position - root.Position).Magnitude)
+                        text = text .. "<font color='#ffffff'>| "..dist.."m</font>"
+                    end
+                    info.Label.Text = text
+                elseif info then
+                    info:Destroy()
+                end
+            end
+        end
+    end
+end
+RS.RenderStepped:Connect(function()
+    if PLAYER_ESP.Enabled then UpdatePlayerESP() end
+end)
+
+-- ============================================================
+-- 透视 Tab（含新增扩展透视分类）
+-- ============================================================
 local T4=MW:Tab({Title="透视"})
 local C4F=T4:Category({Title="玩家ESP",IconName="eye"})
 local ESPConfig={Enabled=false,ShowName=true,ShowHealth=false,ShowDistance=false,ShowWeapon=false,ShowTeam=false,ShowBackpack=false,FillTransparency=0.5,OutlineTransparency=0.2,TextSize=14,TextOutline=true,TeammateColor=Color3.fromRGB(0,255,100),EnemyColor=Color3.fromRGB(255,50,50),MaxDistance=2000,UseDistanceFade=true,TeamCheck=true,HighlightEnabled=true,BoxOutlineEnabled=true,WallhackEnabled=false,NameTagSize=1.0,HealthBarEnabled=true,DistanceScale=true,UpdateRate=30}
@@ -781,6 +1020,64 @@ ESPConfig.NameTagSize=v
 if ESPConfig.Enabled then RecreateAllESP()end
 end})
 
+-- ===== 扩展透视（NPC / 互动 / 玩家） =====
+local C4N = T4:Category({Title="扩展透视",IconName="eye"})
+
+C4N:Toggle({
+    Title = "NPC透视",
+    Value = false,
+    Callback = function(v)
+        ToggleNPCESP(v)
+        if v then AddFeature("NPC透视") else RemoveFeature("NPC透视") end
+    end
+})
+
+C4N:Toggle({
+    Title = "旧版互动透视",
+    Value = false,
+    Callback = function(v)
+        ToggleInteractESP(v)
+        if v then AddFeature("互动透视") else RemoveFeature("互动透视") end
+    end
+})
+
+C4N:Toggle({
+    Title = "新版互动透视",
+    Value = false,
+    Callback = function(v)
+        ToggleNewInteractESP(v)
+        if v then AddFeature("新版互动透视") else RemoveFeature("新版互动透视") end
+    end
+})
+
+C4N:Button({
+    Text = "刷新新版ESP",
+    Icon = "refresh-cw",
+    Callback = function()
+        ToggleNewInteractESP(false)
+        task.wait(0.2)
+        ToggleNewInteractESP(true)
+    end
+})
+
+C4N:Toggle({
+    Title = "玩家透视",
+    Value = false,
+    Callback = function(v)
+        PLAYER_ESP.Enabled = v
+        if not v then ClearPlayerESP() end
+        if v then AddFeature("玩家透视") else RemoveFeature("玩家透视") end
+    end
+})
+
+C4N:Toggle({ Title="高亮", Value=false, Callback=function(v) PLAYER_ESP.HighlightEnabled = v end })
+C4N:Toggle({ Title="方框", Value=false, Callback=function(v) PLAYER_ESP.BoxEnabled = v end })
+C4N:Toggle({ Title="名字", Value=false, Callback=function(v) PLAYER_ESP.ShowName = v end })
+C4N:Toggle({ Title="血量", Value=false, Callback=function(v) PLAYER_ESP.ShowHealth = v end })
+C4N:Toggle({ Title="距离", Value=false, Callback=function(v) PLAYER_ESP.ShowDist = v end })
+C4N:Toggle({ Title="队伍检测", Value=false, Callback=function(v) PLAYER_ESP.TeamCheck = v end })
+
+-- ============================================================
 local TF=MW:Tab({Title="滤镜与光影"})
 local CF1=TF:Category({Title="画质设置",IconName="sun"})
 CF1:Paragraph({Title="外部光影",Desc="点按钮加载对应的光影脚本",Icon="info"})
@@ -810,7 +1107,66 @@ CF3:Button({Text="复古",Icon="camera",Callback=function()clearPost()local cc=I
 CF3:Button({Text="霓虹",Icon="sparkles",Callback=function()clearPost()local b=Instance.new("BloomEffect")b.Name="TXH_Bloom"b.Intensity=2 b.Size=30 b.Threshold=0.6 b.Parent=LG local cc=Instance.new("ColorCorrectionEffect")cc.Name="TXH_CC"cc.Saturation=0.4 cc.Parent=LG N("滤镜","霓虹",2)end})
 CF3:Button({Text="恢复原状",Icon="refresh-cw",Callback=function()clearPost()LG.Ambient=Color3.fromRGB(0,0,0)LG.OutdoorAmbient=Color3.fromRGB(128,128,128)LG.Brightness=1 LG.ExposureCompensation=0 LG.FogStart=0 LG.FogEnd=1000 LG.FogColor=Color3.fromRGB(192,192,192)N("滤镜","已恢复原状",2)end})
 
--- ============ 动画区（手机端兼容版·修复版） ============
+local TN=MW:Tab({Title="夜视"})
+local C4V=TN:Category({Title="夜视",IconName="sun"})
+C4V:Paragraph({Title="夜视",Desc="开启后环境变亮，夜里也能看清",Icon="info"})
+C4V:Toggle({Title="夜视",Value=false,FeatureName="夜视",Icon="sun",Callback=function(s)
+if s then LG.Ambient=Color3.new(1,1,1)else LG.Ambient=Color3.new(0,0,0)end
+end})
+C4V:Paragraph({Title="去雾",Desc="开启后去除雾气，关闭恢复原状",Icon="info"})
+local fogOrigStart=LG.FogStart
+local fogOrigEnd=LG.FogEnd
+C4V:Toggle({Title="去雾",Value=false,FeatureName="去雾",Icon="cloud-off",Callback=function(s)
+if s then
+fogOrigStart=LG.FogStart
+fogOrigEnd=LG.FogEnd
+LG.FogStart=0
+LG.FogEnd=100000000000000000000000
+N("去雾","已开启",2)
+else
+LG.FogStart=fogOrigStart
+LG.FogEnd=fogOrigEnd
+N("去雾","已关闭",2)
+end
+end})
+
+C4V:Paragraph({Title="去阴影",Desc="去掉全局阴影和所有部件的投影（手机端性能也会更好）",Icon="moon"})
+local shadowOriginals={}
+local noShadowConn=nil
+local origGlobalShadows=LG.GlobalShadows
+
+local function noShadowApply(part)
+    if part:IsA("BasePart") and part.CastShadow then
+        if shadowOriginals[part]==nil then shadowOriginals[part]=true end
+        pcall(function() part.CastShadow=false end)
+    end
+end
+
+C4V:Toggle({Title="去阴影",Value=false,FeatureName="去阴影",Icon="moon",Callback=function(s)
+    if s then
+        origGlobalShadows=LG.GlobalShadows
+        pcall(function() LG.GlobalShadows=false end)
+        for _,d in ipairs(workspace:GetDescendants())do
+            if d:IsA("BasePart") then noShadowApply(d) end
+        end
+        noShadowConn=workspace.DescendantAdded:Connect(function(d)
+            if d:IsA("BasePart") then noShadowApply(d) end
+        end)
+        N("去阴影","已开启",2)
+    else
+        pcall(function() LG.GlobalShadows=origGlobalShadows end)
+        if noShadowConn then noShadowConn:Disconnect()noShadowConn=nil end
+        for part,_ in pairs(shadowOriginals)do
+            pcall(function()
+                if part and part.Parent then part.CastShadow=true end
+            end)
+        end
+        shadowOriginals={}
+        N("去阴影","已关闭",2)
+    end
+end})
+
+-- ============ 动画区 ============
 local TA=MW:Tab({Title="动画"})
 local CA=TA:Category({Title="动画包",IconName="star"})
 
@@ -936,7 +1292,6 @@ CA2:Slider({Title="动画速度",Min=0,Max=10,Default=1,Ticks=20,Callback=functi
     animSpeed=v
     if curTrack then pcall(function() curTrack:AdjustSpeed(v) end) end
 end})
--- ============ 动画区结束 ============
 
 local T5=MW:Tab({Title="杂项"})
 local C5=T5:Category({Title="快捷操作",IconName="zap"})
