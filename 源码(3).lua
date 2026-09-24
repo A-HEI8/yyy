@@ -495,7 +495,174 @@ else if speakThread then task.cancel(speakThread)speakThread=nil end N("消息",
 end})
 
 -- ============================================================
--- NPC / 互动 / 玩家透视 系统（新增，供透视 Tab 使用）
+-- 互动 Tab
+-- ============================================================
+local TI = MW:Tab({Title="互动"})
+local CInter = TI:Category({Title="快捷互动", IconName="zap"})
+
+-- 兼容函数：执行器没有 fireproximityprompt 时退化处理
+local function FirePrompt(prompt)
+    if not prompt or not prompt.Parent then return end
+    if type(fireproximityprompt) == "function" then
+        pcall(fireproximityprompt, prompt)
+    else
+        -- 退路：本地模拟按住（HoldDuration=0 时基本等同秒触发）
+        pcall(function() prompt:InputHoldBegin() end)
+        task.wait(prompt.HoldDuration or 0)
+        pcall(function() prompt:InputHoldEnd() end)
+    end
+end
+
+-- ===== 快速互动 =====
+CInter:Paragraph({
+    Title = "快速互动",
+    Desc  = "点击后，所有接近提示的按住时间变为 0，碰一下就触发",
+    Icon  = "info"
+})
+
+CInter:Button({
+    Text = "快速互动",
+    Icon = "zap",
+    Callback = function()
+        local ok, err = pcall(function()
+            game:GetService("ProximityPromptService").PromptButtonHoldBegan:Connect(function(prompt)
+                prompt.HoldDuration = 0
+            end)
+        end)
+        if ok then
+            N("互动", "快速互动已开启", 2)
+        else
+            N("失败", tostring(err):sub(1, 80), 4)
+        end
+    end
+})
+
+-- ===== 自动互动 =====
+CInter:Paragraph({
+    Title = "自动互动",
+    Desc  = "开启后自动触发场景内所有接近提示，会被踢风险自担",
+    Icon  = "info"
+})
+
+local autoInteract = false
+
+CInter:Toggle({
+    Title = "自动互动",
+    Value = false,
+    FeatureName = "自动互动",
+    Icon = "repeat",
+    Callback = function(state)
+        if state then
+            if autoInteract then return end
+            autoInteract = true
+            -- ⭐ 必须放线程里跑，否则死循环会卡住整个脚本和 UI
+            task.spawn(function()
+                while autoInteract do
+                    for _, descendant in ipairs(workspace:GetDescendants()) do
+                        if not autoInteract then break end
+                        if descendant:IsA("ProximityPrompt") then
+                            FirePrompt(descendant)
+                        end
+                    end
+                    task.wait(0.25)
+                end
+            end)
+            N("互动", "自动互动已开启", 2)
+        else
+            autoInteract = false
+            N("互动", "自动互动已关闭", 2)
+        end
+    end
+})
+
+-- ===== 互动距离 =====
+CInter:Paragraph({
+    Title = "互动距离",
+    Desc  = "扩大接近提示的触发范围（默认约 10）。开启后对所有已有和新建的提示生效",
+    Icon  = "info"
+})
+
+local interactRangeEnabled = false
+local interactRangeValue   = 20
+local interactRangeConn    = nil
+local interactRangeOrigin  = {}   -- 记录原值，关闭时恢复
+
+local function ApplyInteractRange(prompt)
+    if not prompt or not prompt:IsA("ProximityPrompt") then return end
+    if interactRangeOrigin[prompt] == nil then
+        interactRangeOrigin[prompt] = prompt.MaxActivationDistance
+    end
+    pcall(function() prompt.MaxActivationDistance = interactRangeValue end)
+end
+
+local function EnableInteractRange()
+    if interactRangeConn then return end
+    interactRangeEnabled = true
+
+    -- 已有提示
+    for _, d in ipairs(workspace:GetDescendants()) do
+        if d:IsA("ProximityPrompt") then ApplyInteractRange(d) end
+    end
+
+    -- 后续新增提示（地图流式加载 / 动态刷出的物件也能覆盖）
+    interactRangeConn = workspace.DescendantAdded:Connect(function(d)
+        if not interactRangeEnabled then return end
+        if d:IsA("ProximityPrompt") then
+            task.defer(function() ApplyInteractRange(d) end)
+        end
+    end)
+end
+
+local function DisableInteractRange()
+    interactRangeEnabled = false
+    if interactRangeConn then
+        interactRangeConn:Disconnect()
+        interactRangeConn = nil
+    end
+    for prompt, orig in pairs(interactRangeOrigin) do
+        if prompt and prompt.Parent then
+            pcall(function() prompt.MaxActivationDistance = orig end)
+        end
+    end
+    interactRangeOrigin = {}
+end
+
+CInter:TextInput({
+    Title = "",
+    Placeholder = "输入互动距离，默认 10，如 20",
+    Value = "20",
+    Callback = function(t)
+        local n = tonumber(t)
+        if not n or n <= 0 then return end
+        interactRangeValue = n
+        -- 已开启时立即刷新一遍
+        if interactRangeEnabled then
+            for _, d in ipairs(workspace:GetDescendants()) do
+                if d:IsA("ProximityPrompt") then ApplyInteractRange(d) end
+            end
+        end
+        N("互动", "互动距离 = " .. n, 1)
+    end
+})
+
+CInter:Toggle({
+    Title = "启用互动距离",
+    Value = false,
+    FeatureName = "互动距离",
+    Icon = "maximize",
+    Callback = function(s)
+        if s then
+            EnableInteractRange()
+            N("互动", "互动距离 " .. interactRangeValue .. " 已开启", 2)
+        else
+            DisableInteractRange()
+            N("互动", "互动距离已关闭", 2)
+        end
+    end
+})
+
+-- ============================================================
+-- NPC / 互动 / 玩家透视 系统
 -- ============================================================
 local Connections = {}
 
@@ -860,197 +1027,54 @@ RS.RenderStepped:Connect(function()
 end)
 
 -- ============================================================
--- 透视 Tab（含新增扩展透视分类）
+-- 透视功能 Tab
 -- ============================================================
-local T4=MW:Tab({Title="透视"})
-local C4F=T4:Category({Title="玩家ESP",IconName="eye"})
-local ESPConfig={Enabled=false,ShowName=true,ShowHealth=false,ShowDistance=false,ShowWeapon=false,ShowTeam=false,ShowBackpack=false,FillTransparency=0.5,OutlineTransparency=0.2,TextSize=14,TextOutline=true,TeammateColor=Color3.fromRGB(0,255,100),EnemyColor=Color3.fromRGB(255,50,50),MaxDistance=2000,UseDistanceFade=true,TeamCheck=true,HighlightEnabled=true,BoxOutlineEnabled=true,WallhackEnabled=false,NameTagSize=1.0,HealthBarEnabled=true,DistanceScale=true,UpdateRate=30}
-local ESPCache={}
-local LastUpdateTime=0
-local function CalcVis(d,mx)if d>mx then return 0 end local fs=mx*0.8 if d>fs then return 1-((d-fs)/(mx-fs))end return 1 end
-local function CalcColor(esp,hum,d)local isT=ESPConfig.TeamCheck and esp.Player.Team==LP.Team return isT and ESPConfig.TeammateColor or ESPConfig.EnemyColor end
-local function IsBehindWall(c)if not ESPConfig.WallhackEnabled then return false end local hrp=c:FindFirstChild("HumanoidRootPart")if not hrp then return true end local ray=Ray.new(Cam.CFrame.Position,(hrp.Position-Cam.CFrame.Position).Unit*100)local f={Cam}if LP.Character then table.insert(f,LP.Character)end table.insert(f,c)local part,_=workspace:FindPartOnRayWithIgnoreList(ray,f)return part~=nil end
-local function GetWeapon(c)local t=c:FindFirstChildOfClass("Tool")return t and t.Name or "没武器" end
-local function GetBackpack(p)local w={}if p:FindFirstChild("Backpack")then for _,t in ipairs(p.Backpack:GetChildren())do if t:IsA("Tool")then table.insert(w,t.Name)end end end return #w>0 and table.concat(w,", ")or "没武器" end
-local CleanupESP
-local function CreateESP(c,p)
-if not c or not c.Parent or ESPCache[c]then return end
-local hrp=c:FindFirstChild("HumanoidRootPart")if not hrp then return end
-local esp={Character=c,Player=p,Highlight=nil,Billboard=nil,HealthBar=nil,Connections={}}
-esp.Highlight=Instance.new("Highlight")esp.Highlight.Name="ESP_HL"esp.Highlight.FillColor=Color3.new(1,1,1)esp.Highlight.OutlineColor=Color3.new(0,0,0)esp.Highlight.FillTransparency=ESPConfig.FillTransparency esp.Highlight.OutlineTransparency=ESPConfig.OutlineTransparency esp.Highlight.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop esp.Highlight.Enabled=ESPConfig.Enabled and ESPConfig.HighlightEnabled esp.Highlight.Parent=c
-esp.Billboard=Instance.new("BillboardGui")esp.Billboard.Name="ESP_BB"esp.Billboard.AlwaysOnTop=true esp.Billboard.Size=UDim2.new(0,200*ESPConfig.NameTagSize,0,60*ESPConfig.NameTagSize)esp.Billboard.StudsOffset=Vector3.new(0,3,0)esp.Billboard.Adornee=hrp esp.Billboard.Enabled=ESPConfig.Enabled esp.Billboard.MaxDistance=ESPConfig.MaxDistance esp.Billboard.Parent=c
-local lbl=Instance.new("TextLabel")lbl.Name="ESP_LBL"lbl.BackgroundTransparency=1 lbl.Size=UDim2.new(1,0,1,0)lbl.TextColor3=Color3.new(1,1,1)lbl.TextSize=ESPConfig.TextSize*ESPConfig.NameTagSize lbl.Font=Enum.Font.SourceSansBold lbl.TextStrokeTransparency=ESPConfig.TextOutline and 0.5 or 1 lbl.TextStrokeColor3=Color3.new(0,0,0)lbl.Text=""lbl.ZIndex=10 lbl.Parent=esp.Billboard
-if ESPConfig.HealthBarEnabled then
-local hb=Instance.new("Frame")hb.Name="ESP_HB"hb.BackgroundColor3=Color3.new(0.2,0.2,0.2)hb.BorderSizePixel=0 hb.Size=UDim2.new(1,0,0,4*ESPConfig.NameTagSize)hb.Position=UDim2.new(0,0,1,0)hb.ZIndex=11 hb.Parent=esp.Billboard
-local hf=Instance.new("Frame")hf.Name="ESP_HF"hf.BackgroundColor3=Color3.new(0,1,0)hf.BorderSizePixel=0 hf.Size=UDim2.new(1,0,1,0)hf.ZIndex=12 hf.Parent=hb
-esp.HealthBar=hf
-end
-esp.Connections.cr=c.AncestryChanged:Connect(function(_,par)if not par then CleanupESP(c)end end)
-ESPCache[c]=esp
-end
-CleanupESP=function(c)
-local esp=ESPCache[c]
-if esp then
-for _,cn in pairs(esp.Connections)do cn:Disconnect()end
-if esp.Highlight then esp.Highlight:Destroy()end
-if esp.Billboard then esp.Billboard:Destroy()end
-ESPCache[c]=nil
-end
-end
-local function UpdateESP()
-local ct=tick()
-if ct-LastUpdateTime<(1/ESPConfig.UpdateRate)then return end
-LastUpdateTime=ct
-if not ESPConfig.Enabled then
-for _,esp in pairs(ESPCache)do
-if esp.Highlight then esp.Highlight.Enabled=false end
-if esp.Billboard then esp.Billboard.Enabled=false end
-end
-return
-end
-for c,esp in pairs(ESPCache)do
-if not c or not c.Parent then CleanupESP(c)continue end
-local hrp=c:FindFirstChild("HumanoidRootPart")if not hrp then continue end
-local hum=c:FindFirstChildOfClass("Humanoid")
-if not hum or hum.Health<=0 then
-if esp.Highlight then esp.Highlight.Enabled=false end
-if esp.Billboard then esp.Billboard.Enabled=false end
-continue
-end
-local d=(hrp.Position-Cam.CFrame.Position).Magnitude
-local v=CalcVis(d,ESPConfig.MaxDistance)
-if v<=0 then
-if esp.Highlight then esp.Highlight.Enabled=false end
-if esp.Billboard then esp.Billboard.Enabled=false end
-continue
-end
-local col=CalcColor(esp,hum,d)
-local am=ESPConfig.UseDistanceFade and v or 1
-local bw=IsBehindWall(c)
-if esp.Highlight then
-esp.Highlight.FillColor=col esp.Highlight.OutlineColor=Color3.new(0,0,0)
-esp.Highlight.FillTransparency=ESPConfig.FillTransparency+(0.3*(1-am))
-if ESPConfig.BoxOutlineEnabled then esp.Highlight.OutlineTransparency=ESPConfig.OutlineTransparency+(0.3*(1-am))else esp.Highlight.OutlineTransparency=1 end
-esp.Highlight.Enabled=ESPConfig.HighlightEnabled and(not bw or ESPConfig.WallhackEnabled)
-end
-local lbl=esp.Billboard:FindFirstChildOfClass("TextLabel")
-if lbl then
-local parts={}
-if ESPConfig.ShowName then table.insert(parts,esp.Player.Name)end
-if ESPConfig.ShowHealth then table.insert(parts,string.format("HP: %d/%d",math.floor(hum.Health),math.floor(hum.MaxHealth)))end
-if ESPConfig.ShowDistance then table.insert(parts,string.format("%dm",math.floor(d)))end
-if ESPConfig.ShowWeapon then table.insert(parts,GetWeapon(c))end
-if ESPConfig.ShowBackpack then local bwp=GetBackpack(esp.Player)if bwp~="没武器"then table.insert(parts,"背包: "..bwp)end end
-if ESPConfig.ShowTeam then local isT=ESPConfig.TeamCheck and esp.Player.Team==LP.Team table.insert(parts,isT and "队友"or "敌人")end
-if bw and ESPConfig.WallhackEnabled then table.insert(parts,"[墙后]")end
-lbl.Text=table.concat(parts," | ")
-lbl.TextColor3=col
-lbl.TextTransparency=ESPConfig.UseDistanceFade and(0.3*(1-am))or 0
-lbl.TextSize=ESPConfig.TextSize*(ESPConfig.DistanceScale and math.clamp(1.5-(d/1000)*0.5,0.8,1.5)or 1)*ESPConfig.NameTagSize
-esp.Billboard.Enabled=#parts>0 and(not bw or ESPConfig.WallhackEnabled)
-end
-if esp.HealthBar then
-local hp=hum.Health/hum.MaxHealth
-esp.HealthBar.Size=UDim2.new(hp,0,1,0)
-esp.HealthBar.BackgroundColor3=Color3.new(1-hp,hp,0)
-end
-end
-end
-local function RecreateAllESP()
-for c,_ in pairs(ESPCache)do CleanupESP(c)end
-if ESPConfig.Enabled then
-for _,p in ipairs(Players:GetPlayers())do
-if p~=LP and p.Character then CreateESP(p.Character,p)end
-end
-end
-UpdateESP()
-end
-local function InitPlayerESP(p)
-if p==LP then return end
-local function CharAdd(c)task.wait(0.5)if ESPConfig.Enabled then CreateESP(c,p)end end
-if p.Character and ESPConfig.Enabled then task.spawn(CharAdd,p.Character)end
-p.CharacterAdded:Connect(CharAdd)
-p.CharacterRemoving:Connect(function(c)CleanupESP(c)end)
-end
-RS.Heartbeat:Connect(function()if not LP.Character then return end pcall(UpdateESP)end)
-if ESPConfig.Enabled then
-for _,p in ipairs(Players:GetPlayers())do if p~=LP then InitPlayerESP(p)end end
-end
-Players.PlayerAdded:Connect(InitPlayerESP)
-C4F:Paragraph({Title="ESP 主开关",Desc="开启后下方元素生效",Icon="info"})
-C4F:Toggle({Title="开启ESP",Value=false,FeatureName="ESP",Icon="eye",Callback=function(s)
-ESPConfig.Enabled=s
-if s then RecreateAllESP()
-else
-for c,esp in pairs(ESPCache)do
-if esp.Highlight then esp.Highlight:Destroy()end
-if esp.Billboard then esp.Billboard:Destroy()end
-end
-ESPCache={}
-end
-end})
-C4F:Paragraph({Title="视觉效果",Desc="Highlight 的填充和描边",Icon="info"})
-C4F:Toggle({Title="内部发光",Value=false,FeatureName="发光",Icon="sun",Callback=function(s)
-ESPConfig.HighlightEnabled=s
-for _,esp in pairs(ESPCache)do if esp.Highlight then esp.Highlight.Enabled=s and ESPConfig.Enabled end end
-end})
-C4F:Toggle({Title="方框描边",Value=false,FeatureName="描边",Icon="square",Callback=function(s)
-ESPConfig.BoxOutlineEnabled=s
-for _,esp in pairs(ESPCache)do if esp.Highlight then esp.Highlight.OutlineTransparency=s and ESPConfig.OutlineTransparency or 1 end end
-end})
-C4F:Paragraph({Title="显示内容",Desc="勾选你想看的元素",Icon="info"})
-C4F:Toggle({Title="显示玩家名字",Value=true,FeatureName="名字",Icon="type",Callback=function(s)ESPConfig.ShowName=s UpdateESP()end})
-C4F:Toggle({Title="显示血量",Value=false,FeatureName="血量",Icon="heart",Callback=function(s)ESPConfig.ShowHealth=s UpdateESP()end})
-C4F:Toggle({Title="显示距离",Value=false,FeatureName="距离",Icon="ruler",Callback=function(s)ESPConfig.ShowDistance=s UpdateESP()end})
-C4F:Toggle({Title="显示武器",Value=false,FeatureName="武器",Icon="sword",Callback=function(s)ESPConfig.ShowWeapon=s UpdateESP()end})
-C4F:Toggle({Title="显示背包",Value=false,FeatureName="背包",Icon="package",Callback=function(s)ESPConfig.ShowBackpack=s UpdateESP()end})
-C4F:Toggle({Title="显示队伍",Value=false,FeatureName="队伍",Icon="users",Callback=function(s)ESPConfig.ShowTeam=s UpdateESP()end})
-C4F:Paragraph({Title="颜色",Desc="自定义队友和敌人的颜色",Icon="palette"})
-C4F:ColorPickerButton({Title="队友颜色",Default=Color3.fromRGB(0,255,100),Callback=function(color,alpha)ESPConfig.TeammateColor=color UpdateESP()end})
-C4F:ColorPickerButton({Title="敌人颜色",Default=Color3.fromRGB(255,50,50),Callback=function(color,alpha)ESPConfig.EnemyColor=color UpdateESP()end})
-C4F:Paragraph({Title="高级检测",Desc="队伍 / 穿墙 / 距离",Icon="info"})
-C4F:Toggle({Title="队伍检测",Value=true,FeatureName="队伍检测",Icon="users",Callback=function(s)ESPConfig.TeamCheck=s UpdateESP()end})
-C4F:Toggle({Title="穿墙显示",Value=false,FeatureName="穿墙",Icon="shield-off",Callback=function(s)ESPConfig.WallhackEnabled=s UpdateESP()end})
-C4F:Toggle({Title="距离缩放",Value=true,FeatureName="距离缩放",Icon="maximize",Callback=function(s)ESPConfig.DistanceScale=s UpdateESP()end})
-C4F:Toggle({Title="距离淡化",Value=true,FeatureName="距离淡化",Icon="eye-off",Callback=function(s)ESPConfig.UseDistanceFade=s UpdateESP()end})
-C4F:Paragraph({Title="其他",Desc="距离和样式",Icon="info"})
-C4F:Slider({Title="最大距离",Min=500,Max=5000,Default=2000,Ticks=45,Callback=function(v)ESPConfig.MaxDistance=v end})
-C4F:Slider({Title="名字大小",Min=0.5,Max=2,Default=1,Ticks=15,Callback=function(v)
-ESPConfig.NameTagSize=v
-if ESPConfig.Enabled then RecreateAllESP()end
-end})
+local TabVisual = MW:Tab({Title="透视功能"})
 
--- ===== 扩展透视（NPC / 互动 / 玩家） =====
-local C4N = T4:Category({Title="扩展透视",IconName="eye"})
+-- ===== 提示 =====
+TabVisual:Paragraph({
+    Title = "提示",
+    Desc  = "旧互动少但中文，新版更多但英文",
+    Icon  = "info"
+})
 
-C4N:Toggle({
+-- ================= NPC =================
+TabVisual:Toggle({
     Title = "NPC透视",
     Value = false,
+    FeatureName = "NPC透视",
+    Icon = "eye",
     Callback = function(v)
         ToggleNPCESP(v)
         if v then AddFeature("NPC透视") else RemoveFeature("NPC透视") end
     end
 })
 
-C4N:Toggle({
+-- ================= 旧互动 =================
+TabVisual:Toggle({
     Title = "旧版互动透视",
     Value = false,
+    FeatureName = "旧版互动透视",
+    Icon = "eye",
     Callback = function(v)
         ToggleInteractESP(v)
         if v then AddFeature("互动透视") else RemoveFeature("互动透视") end
     end
 })
 
-C4N:Toggle({
+-- ================= 新互动 =================
+TabVisual:Toggle({
     Title = "新版互动透视",
     Value = false,
+    FeatureName = "新版互动透视",
+    Icon = "eye",
     Callback = function(v)
         ToggleNewInteractESP(v)
         if v then AddFeature("新版互动透视") else RemoveFeature("新版互动透视") end
     end
 })
 
-C4N:Button({
+TabVisual:Button({
     Text = "刷新新版ESP",
     Icon = "refresh-cw",
     Callback = function()
@@ -1060,9 +1084,15 @@ C4N:Button({
     end
 })
 
-C4N:Toggle({
+-- ================= 玩家ESP =================
+-- 说明：ClearPlayerESP / UpdatePlayerESP / PLAYER_ESP 已在上方「NPC / 互动 / 玩家透视 系统」
+-- 段落里定义，这里直接复用，不再重复定义。
+
+TabVisual:Toggle({
     Title = "玩家透视",
     Value = false,
+    FeatureName = "玩家透视",
+    Icon = "eye",
     Callback = function(v)
         PLAYER_ESP.Enabled = v
         if not v then ClearPlayerESP() end
@@ -1070,12 +1100,53 @@ C4N:Toggle({
     end
 })
 
-C4N:Toggle({ Title="高亮", Value=false, Callback=function(v) PLAYER_ESP.HighlightEnabled = v end })
-C4N:Toggle({ Title="方框", Value=false, Callback=function(v) PLAYER_ESP.BoxEnabled = v end })
-C4N:Toggle({ Title="名字", Value=false, Callback=function(v) PLAYER_ESP.ShowName = v end })
-C4N:Toggle({ Title="血量", Value=false, Callback=function(v) PLAYER_ESP.ShowHealth = v end })
-C4N:Toggle({ Title="距离", Value=false, Callback=function(v) PLAYER_ESP.ShowDist = v end })
-C4N:Toggle({ Title="队伍检测", Value=false, Callback=function(v) PLAYER_ESP.TeamCheck = v end })
+TabVisual:Toggle({
+    Title = "高亮",
+    Value = false,
+    FeatureName = "高亮",
+    Icon = "sun",
+    Callback = function(v) PLAYER_ESP.HighlightEnabled = v end
+})
+
+TabVisual:Toggle({
+    Title = "方框",
+    Value = false,
+    FeatureName = "方框",
+    Icon = "square",
+    Callback = function(v) PLAYER_ESP.BoxEnabled = v end
+})
+
+TabVisual:Toggle({
+    Title = "名字",
+    Value = false,
+    FeatureName = "名字",
+    Icon = "type",
+    Callback = function(v) PLAYER_ESP.ShowName = v end
+})
+
+TabVisual:Toggle({
+    Title = "血量",
+    Value = false,
+    FeatureName = "血量",
+    Icon = "heart",
+    Callback = function(v) PLAYER_ESP.ShowHealth = v end
+})
+
+TabVisual:Toggle({
+    Title = "距离",
+    Value = false,
+    FeatureName = "距离",
+    Icon = "ruler",
+    Callback = function(v) PLAYER_ESP.ShowDist = v end
+})
+
+TabVisual:Toggle({
+    Title = "队伍检测",
+    Value = false,
+    FeatureName = "队伍检测",
+    Icon = "users",
+    Callback = function(v) PLAYER_ESP.TeamCheck = v end
+})
 
 -- ============================================================
 local TF=MW:Tab({Title="滤镜与光影"})
