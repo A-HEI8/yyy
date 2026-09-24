@@ -513,26 +513,52 @@ local function FirePrompt(prompt)
     end
 end
 
--- ===== 快速互动 =====
-CInter:Button({
+-- ===== 快速互动（开关） =====
+CInter:Paragraph({
     Title = "快速互动",
-    Desc  = "点击后，所有接近提示的按住时间变为 0，碰一下就触发",
+    Desc  = "开启后，所有接近提示的按住时间变为 0，碰一下就触发",
     Icon  = "info"
 })
 
-CInter:Button({
-    Text = "快速互动",
+local quickInteractConn   = nil
+local quickInteractOrigin = {}   -- 记录被改过的 HoldDuration，关闭时恢复
+
+CInter:Toggle({
+    Title = "快速互动",
+    Value = false,
+    FeatureName = "快速互动",
     Icon = "zap",
-    Callback = function()
-        local ok, err = pcall(function()
-            game:GetService("ProximityPromptService").PromptButtonHoldBegan:Connect(function(prompt)
-                prompt.HoldDuration = 0
+    Callback = function(s)
+        if s then
+            if quickInteractConn then return end
+            local ok, err = pcall(function()
+                quickInteractConn = game:GetService("ProximityPromptService").PromptButtonHoldBegan:Connect(function(prompt)
+                    if not prompt then return end
+                    if quickInteractOrigin[prompt] == nil then
+                        quickInteractOrigin[prompt] = prompt.HoldDuration
+                    end
+                    pcall(function() prompt.HoldDuration = 0 end)
+                end)
             end)
-        end)
-        if ok then
-            N("互动", "快速互动已开启", 2)
+            if ok then
+                N("互动", "快速互动已开启", 2)
+            else
+                N("失败", tostring(err):sub(1, 80), 4)
+                quickInteractConn = nil
+            end
         else
-            N("失败", tostring(err):sub(1, 80), 4)
+            if quickInteractConn then
+                quickInteractConn:Disconnect()
+                quickInteractConn = nil
+            end
+            -- 把被改过的提示还原
+            for prompt, orig in pairs(quickInteractOrigin) do
+                if prompt and prompt.Parent then
+                    pcall(function() prompt.HoldDuration = orig end)
+                end
+            end
+            quickInteractOrigin = {}
+            N("互动", "快速互动已关闭", 2)
         end
     end
 })
