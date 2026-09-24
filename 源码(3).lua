@@ -514,7 +514,7 @@ local function FirePrompt(prompt)
 end
 
 -- ===== 快速互动 =====
-CInter:Paragraph({
+CInter:Button({
     Title = "快速互动",
     Desc  = "点击后，所有接近提示的按住时间变为 0，碰一下就触发",
     Icon  = "info"
